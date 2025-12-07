@@ -3,23 +3,22 @@ import psycopg2
 from datetime import datetime, timedelta
 from data_pipeline.get_dataset import get_dataset
 from data_pipeline.load_data_to_db import load_data_to_db, DatabaseConnector
+from data_pipeline.etl import etl
+from data_pipeline.fill_structured_table import fill_structured_table
 from config import DATABASE_CONFIG, ETL_CONFIG
 import logging
 
 logger = logging.getLogger(__name__)
-
 
 @pytest.fixture(scope='session')
 def db_config():
     """Конфигурация БД для тестов."""
     return DATABASE_CONFIG
 
-
 @pytest.fixture
 def test_data():
     """Генерирует тестовые данные."""
     return get_dataset(num_records=100, seed=42)
-
 
 class TestGetDataset:
     """Тесты генератора данных."""
@@ -42,9 +41,7 @@ class TestGetDataset:
     def test_dataset_has_anomalies(self):
         """Проверяет наличие аномалий в данных."""
         df = get_dataset(num_records=1000)
-        # Проверяем наличие NULL значений
         assert df.isnull().sum().sum() > 0
-        # Проверяем наличие отрицательных значений
         has_negative = (df['amount'] < 0).any() or (df['duration'] < 0).any()
         assert has_negative or (df['amount'].isna().any() or df['duration'].isna().any())
     
@@ -54,11 +51,9 @@ class TestGetDataset:
         df2 = get_dataset(num_records=100, seed=42)
         assert df1.equals(df2)
 
-
 class TestDatabaseConnector:
     """Тесты подключения к БД."""
     
-    #@pytest.mark.skip(reason="Требует запущенную БД локально")
     def test_connection(self, db_config):
         """Проверяет подключение к БД."""
         connector = DatabaseConnector(db_config)
@@ -67,12 +62,9 @@ class TestDatabaseConnector:
         connector.disconnect()
         assert connector.connection is None
 
-
-
 class TestLoadDataToDB:
     """Тесты загрузки данных в БД."""
     
-    #@pytest.mark.skip(reason="Требует запущенную БД локально")
     def test_load_data(self, db_config, test_data):
         """Проверяет загрузку данных в БД."""
         load_data_to_db(
@@ -90,11 +82,9 @@ class TestLoadDataToDB:
         connector.disconnect()
         assert count > 0
 
-
 class TestETLFunction:
     """Тесты SQL функции ETL."""
     
-    #@pytest.mark.skip(reason="Требует запущенную БД локально")
     def test_etl_function_execution(self, db_config):
         """Проверяет выполнение SQL функции ETL."""
         start_date = (datetime.now() - timedelta(days=90)).date()
@@ -107,10 +97,8 @@ class TestETLFunction:
             's_psql_dds.fn_etl_data_load', 
             params=(start_date, end_date)
         )
-
         
         connector.disconnect()
-
 
 class TestDataQuality:
     """Тесты качества данных."""
@@ -118,7 +106,6 @@ class TestDataQuality:
     def test_dataset_data_types(self):
         """Проверяет типы данных в датасете."""
         df = get_dataset(num_records=100)
-        # Проверяем типы данных
         assert df['id'].dtype == 'int64'
         assert df['amount'].dtype == 'float64'
         assert df['duration'].dtype == 'int64'
@@ -127,8 +114,25 @@ class TestDataQuality:
     def test_dataset_no_empty_categories(self):
         """Проверяет, что категориальные поля не полностью пусты."""
         df = get_dataset(num_records=1000)
-        # Хотя бы одно значение не должно быть NULL для каждого поля
         assert df['source'].notna().any()
         assert df['category'].notna().any()
         assert df['status'].notna().any()
         assert df['region'].notna().any()
+
+class TestIntegration:
+    """Интеграционные тесты для покрытия etl.py и fill_structured_table."""
+
+    def test_fill_structured_table(self, db_config):
+        """Проверяет запуск функции fill_structured_table."""
+        # Убираем .date(), передаем datetime
+        start_date = datetime.now() - timedelta(days=90)
+        end_date = datetime.now()
+        
+        # Запускаем функцию обертки
+        fill_structured_table(db_config, start_date, end_date)
+
+
+    def test_full_etl_pipeline(self):
+        """Проверяет запуск всего пайплайна etl()."""
+        # Запускаем полную цепочку (Генерация -> Загрузка -> Очистка)
+        etl()
