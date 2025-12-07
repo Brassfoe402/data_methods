@@ -58,9 +58,7 @@ jobs:
       env:
         PGPASSWORD: postgres
       run: |
-        # Убедитесь, что путь к файлу верный!
-        # Если файл лежит в data_pipeline/sql/init.sql:
-        psql -h localhost -U postgres -d etl_lab -f data_pipeline/sql/init.sql
+        psql -h localhost -U postgres -d etl_lab -f sql/init.sql
 
     - name: Run Tests
       env:
