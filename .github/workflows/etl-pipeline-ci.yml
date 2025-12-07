@@ -13,10 +13,8 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: etl_lab
-        # ОБЯЗАТЕЛЬНО: проброс порта на хост
         ports:
           - 5432:5432
-        # Простой healthcheck, чтобы сервис считался готовым
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -70,7 +68,7 @@ jobs:
         DB_USER: postgres
         DB_PASSWORD: postgres
       run: |
-        pytest tests/ -v
+        pytest tests/ -v --cov=data_pipeline --cov-report=term-missing
 
     - name: Build Docker Image
       run: |
