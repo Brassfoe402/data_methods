@@ -5,7 +5,6 @@ try:
     conn = psycopg2.connect(**DATABASE_CONFIG)
     print("✅ Подключение к БД успешно!")
     
-    # Проверка версии базы данных
     cur = conn.cursor()
     cur.execute('SELECT version();')
     version = cur.fetchone()

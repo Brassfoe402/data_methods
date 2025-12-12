@@ -7,20 +7,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 class DatabaseConnector:
-    """Класс для управления подключением к PostgreSQL."""
     
     def __init__(self, config: Dict[str, Any]):
-        """
-        Инициализирует подключение к БД.
-        
-        Args:
-            config: конфигурация подключения
-        """
         self.config = config
         self.connection = None
     
     def connect(self):
-        """Устанавливает подключение к БД."""
         try:
             self.connection = psycopg2.connect(**self.config)
             print("Соединение с базой установлено")
@@ -30,14 +22,12 @@ class DatabaseConnector:
             raise
     
     def disconnect(self):
-        """Закрывает подключение."""
         if self.connection:
             self.connection.close()
             self.connection = None
             print("Соединение с базой закрыто")
     
     def execute_query(self, query: str, params: Optional[Tuple[Any, ...]] = None):
-        """Выполняет SQL-запрос."""
         if self.connection is None:
             raise RuntimeError("Соединение с БД не установлено")
         cursor = self.connection.cursor()
@@ -53,12 +43,10 @@ class DatabaseConnector:
             cursor.close()
     
     def execute_function(self, function_name: str, params: Optional[Tuple[Any, ...]] = None) -> Any:
-        """Выполняет SQL-функцию."""
         if self.connection is None:
             raise RuntimeError("Соединение с БД не установлено")
         cursor = self.connection.cursor()
         try:
-            # Формируем вызов функции
             param_str = ','.join(['%s'] * len(params)) if params else ''
             query = f"SELECT {function_name}({param_str})"
             cursor.execute(query, params)
@@ -76,15 +64,6 @@ class DatabaseConnector:
 def load_data_to_db(df: pd.DataFrame, db_config: Dict[str, Any], 
                     schema: str = 's_psql_dds', 
                     table: str = 't_sql_source_unstructured'):
-    """
-    Загружает данные в неструктурированную таблицу.
-    
-    Args:
-        df: DataFrame для загрузки
-        db_config: конфигурация БД
-        schema: имя схемы
-        table: имя таблицы
-    """
     connector = DatabaseConnector(db_config)
     
     try:
@@ -96,12 +75,10 @@ def load_data_to_db(df: pd.DataFrame, db_config: Dict[str, Any],
         columns = df.columns.tolist()
         column_names = ', '.join(columns)
         
-        # --- ИСПРАВЛЕНО: для execute_values используем просто %s ---
         query = f"INSERT INTO {schema}.{table} ({column_names}) VALUES %s"
 
         values = [tuple(row) for row in df.values]
         
-        # execute_values сам развернет список значений
         execute_values(cursor, query, values, page_size=1000)
         connector.connection.commit()
         

@@ -3,7 +3,6 @@ import sys
 
 
 def main():
-    """Запускает ETL-пипелайн."""
     try:
         etl()
         sys.exit(0)
@@ -14,6 +13,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-print("✓ main.py создан")

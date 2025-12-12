@@ -3,9 +3,6 @@ CREATE SCHEMA s_psql_dds;
 
 COMMENT ON SCHEMA s_psql_dds IS 'DDS (Detailed Data Store) слой для структурированных и неструктурированных данных';
 
--- =============================================
--- 1. Создание таблицы для неструктурированных данных (Source)
--- =============================================
 CREATE TABLE s_psql_dds.t_sql_source_unstructured (
     id INTEGER,
     source VARCHAR(50),
@@ -19,9 +16,6 @@ CREATE TABLE s_psql_dds.t_sql_source_unstructured (
     updated_at TIMESTAMP
 );
 
--- =============================================
--- 2. Создание таблицы для структурированных данных (Target)
--- =============================================
 CREATE TABLE s_psql_dds.t_sql_source_structured (
     id SERIAL PRIMARY KEY,
     id_source INTEGER UNIQUE NOT NULL,
@@ -38,9 +32,6 @@ CREATE TABLE s_psql_dds.t_sql_source_structured (
     CONSTRAINT chk_dates CHECK (created_at <= updated_at)
 );
 
--- =============================================
--- 3. Создание таблицы для тестирования (Copy)
--- =============================================
 CREATE TABLE s_psql_dds.t_sql_source_structured_copy (
     id SERIAL PRIMARY KEY,
     id_source INTEGER UNIQUE NOT NULL,
@@ -57,28 +48,23 @@ CREATE TABLE s_psql_dds.t_sql_source_structured_copy (
     CONSTRAINT chk_dates CHECK (created_at <= updated_at)
 );
 
--- =============================================
--- 4. Создание функции ETL (fn_etl_data_load)
--- =============================================
 CREATE OR REPLACE FUNCTION s_psql_dds.fn_etl_data_load(
     p_start_date DATE,
     p_end_date DATE
 )
 RETURNS VOID AS $$
 BEGIN
-    -- Вставка данных из неструктурированной таблицы в структурированную
-    -- с очисткой и преобразованием
     INSERT INTO s_psql_dds.t_sql_source_structured (
         id_source, source, category, status, region, 
         amount, duration, count, created_at, updated_at
     )
-    SELECT DISTINCT ON (id) -- Убираем дубликаты по ID, оставляем первую попавшуюся запись
+    SELECT DISTINCT ON (id) 
         id,
-        COALESCE(source, 'UNKNOWN'),   -- Заполняем пропуски
+        COALESCE(source, 'UNKNOWN'),   
         COALESCE(category, 'UNKNOWN'),
         COALESCE(status, 'UNKNOWN'),
         COALESCE(region, 'UNKNOWN'),
-        ABS(amount),                   -- Убираем отрицательные значения
+        ABS(amount),                   
         ABS(duration),
         count,
         created_at,
@@ -86,11 +72,10 @@ BEGIN
     FROM s_psql_dds.t_sql_source_unstructured
     WHERE 
         created_at::DATE BETWEEN p_start_date AND p_end_date
-        AND id IS NOT NULL             -- Отсеиваем записи без ID
-        AND amount IS NOT NULL         -- Отсеиваем записи без суммы (можно настроить логику)
-        AND created_at <= updated_at   -- Отсеиваем некорректные даты (или можно исправлять)
+        AND id IS NOT NULL             
+        AND amount IS NOT NULL         
+        AND created_at <= updated_at   
     
-    -- При конфликте ID (если запускаем повторно) обновляем данные
     ON CONFLICT (id_source) DO UPDATE 
     SET
         source = EXCLUDED.source,

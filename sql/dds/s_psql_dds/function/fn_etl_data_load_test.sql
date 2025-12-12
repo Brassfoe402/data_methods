@@ -8,13 +8,10 @@ returns table (
 declare
     v_inserted_rows integer := 0;
 begin
-    -- Логирование начала функции
     raise notice 'Начало fn_etl_data_load_test: % - %', p_start_date, p_end_date;
     
-    -- Очищаем целевую таблицу для тестирования
     truncate table s_psql_dds.t_sql_source_structured_copy;
     
-    -- Основная логика трансформации и загрузки (аналогично основной функции)
     insert into s_psql_dds.t_sql_source_structured_copy 
     (id_source, source, category, status, region, amount, duration, count, created_at, updated_at)
     select 
@@ -79,6 +76,3 @@ end;
 $$ language plpgsql;
 
 comment on function s_psql_dds.fn_etl_data_load_test(date, date) is 'Тестовая ETL функция для заполнения копии таблицы структурированных данных';
-
-
-print("✓ fn_etl_data_load_test.sql создан")

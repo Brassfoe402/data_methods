@@ -10,16 +10,6 @@ def fill_structured_table(db_config: Dict[str, Any],
                          start_date: Optional[datetime] = None,
                          end_date: Optional[datetime] = None,
                          function_name = 's_psql_dds.fn_etl_data_load'):
-    """
-    Заполняет структурированную таблицу путем запуска SQL-функции.
-    
-    Args:
-        db_config: конфигурация БД
-        start_date: начальная дата для фильтрации
-        end_date: конечная дата для фильтрации
-        function_name: имя SQL-функции
-    """
-    # Установливаем значения по умолчанию
     if start_date is None:
         start_date = datetime.now() - timedelta(days=90)
     if end_date is None:
@@ -30,7 +20,6 @@ def fill_structured_table(db_config: Dict[str, Any],
     try:
         connector.connect()
         
-        # Выполняем SQL-функцию
         result = connector.execute_function(
             function_name,
             params=(start_date.date(), end_date.date())
@@ -40,6 +29,3 @@ def fill_structured_table(db_config: Dict[str, Any],
         
     finally:
         connector.disconnect()
-
-
-print("✓ fill_structured_table.py создан")

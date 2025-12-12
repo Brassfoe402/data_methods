@@ -12,25 +12,20 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope='session')
 def db_config():
-    """Конфигурация БД для тестов."""
     return DATABASE_CONFIG
 
 @pytest.fixture
 def test_data():
-    """Генерирует тестовые данные."""
     return get_dataset(num_records=100, seed=42)
 
 class TestGetDataset:
-    """Тесты генератора данных."""
     
     def test_dataset_shape(self):
-        """Проверяет размер датасета."""
         df = get_dataset(num_records=100)
         assert len(df) > 0
         assert len(df.columns) == 10
     
     def test_dataset_columns(self):
-        """Проверяет наличие всех колонок."""
         df = get_dataset(num_records=100)
         expected_columns = {
             'id', 'source', 'category', 'status', 'region',
@@ -39,23 +34,19 @@ class TestGetDataset:
         assert set(df.columns) == expected_columns
     
     def test_dataset_has_anomalies(self):
-        """Проверяет наличие аномалий в данных."""
         df = get_dataset(num_records=1000)
         assert df.isnull().sum().sum() > 0
         has_negative = (df['amount'] < 0).any() or (df['duration'] < 0).any()
         assert has_negative or (df['amount'].isna().any() or df['duration'].isna().any())
     
     def test_dataset_reproducibility(self):
-        """Проверяет воспроизводимость данных."""
         df1 = get_dataset(num_records=100, seed=42)
         df2 = get_dataset(num_records=100, seed=42)
         assert df1.equals(df2)
 
 class TestDatabaseConnector:
-    """Тесты подключения к БД."""
     
     def test_connection(self, db_config):
-        """Проверяет подключение к БД."""
         connector = DatabaseConnector(db_config)
         connector.connect()
         assert connector.connection is not None
@@ -63,10 +54,8 @@ class TestDatabaseConnector:
         assert connector.connection is None
 
 class TestLoadDataToDB:
-    """Тесты загрузки данных в БД."""
     
     def test_load_data(self, db_config, test_data):
-        """Проверяет загрузку данных в БД."""
         load_data_to_db(
             test_data,
             db_config,
@@ -83,10 +72,8 @@ class TestLoadDataToDB:
         assert count > 0
 
 class TestETLFunction:
-    """Тесты SQL функции ETL."""
     
     def test_etl_function_execution(self, db_config):
-        """Проверяет выполнение SQL функции ETL."""
         start_date = (datetime.now() - timedelta(days=90)).date()
         end_date = datetime.now().date()
         
@@ -101,10 +88,8 @@ class TestETLFunction:
         connector.disconnect()
 
 class TestDataQuality:
-    """Тесты качества данных."""
     
     def test_dataset_data_types(self):
-        """Проверяет типы данных в датасете."""
         df = get_dataset(num_records=100)
         assert df['id'].dtype == 'int64'
         assert df['amount'].dtype == 'float64'
@@ -112,7 +97,6 @@ class TestDataQuality:
         assert df['count'].dtype == 'int64'
     
     def test_dataset_no_empty_categories(self):
-        """Проверяет, что категориальные поля не полностью пусты."""
         df = get_dataset(num_records=1000)
         assert df['source'].notna().any()
         assert df['category'].notna().any()
@@ -120,19 +104,13 @@ class TestDataQuality:
         assert df['region'].notna().any()
 
 class TestIntegration:
-    """Интеграционные тесты для покрытия etl.py и fill_structured_table."""
 
     def test_fill_structured_table(self, db_config):
-        """Проверяет запуск функции fill_structured_table."""
-        # Убираем .date(), передаем datetime
         start_date = datetime.now() - timedelta(days=90)
         end_date = datetime.now()
         
-        # Запускаем функцию обертки
         fill_structured_table(db_config, start_date, end_date)
 
 
     def test_full_etl_pipeline(self):
-        """Проверяет запуск всего пайплайна etl()."""
-        # Запускаем полную цепочку (Генерация -> Загрузка -> Очистка)
         etl()
