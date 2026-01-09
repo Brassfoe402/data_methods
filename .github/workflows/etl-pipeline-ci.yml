@@ -79,13 +79,6 @@ jobs:
               (select count(*) from s_psql_dds.t_sql_source_structured)   as structured,
               (select count(*) from s_psql_dds.t_dm_task)                 as dm_pg,
               (select count(*) from s_psql_dds.v_dm_task)                 as view_cnt;
-
-            \echo '--- Check schema correctness ---'
-            \dt s_psql_dds.*
-            \dv s_psql_dds.*
-            \d+ s_psql_dds.v_dm_task
-            \d+ s_psql_dds.t_dm_task
-            \df s_psql_dds.fn_dm_data_load
           "
 
           echo "=== MySQL checks ==="
@@ -93,11 +86,6 @@ jobs:
             use etl_lab;
             select count(*) as stg_cnt from t_dm_stg_task;
             select count(*) as dm_cnt  from t_dm_task;
-
-            \echo '--- Check schema correctness ---'
-            show tables;
-            show procedure status where Db='etl_lab';
-            describe t_dm_task;
           "
 
       - name: Extract coverage.xml from a created pytest container
