@@ -52,11 +52,24 @@ begin
         duration = excluded.duration,
         count    = excluded.count,
 
-        -- не даём updated_at "ехать назад"
-        created_at = least(excluded.created_at, excluded.updated_at),
-        updated_at = greatest(s_psql_dds.t_sql_source_structured.updated_at, excluded.updated_at),
+        -- гарантируем created_at <= updated_at при обновлении
+        created_at = least(
+            least(excluded.created_at, excluded.updated_at),
+            s_psql_dds.t_sql_source_structured.created_at
+        ),
+        updated_at = greatest(
+            greatest(excluded.created_at, excluded.updated_at),
+            s_psql_dds.t_sql_source_structured.updated_at
+        ),
 
         load_dttm = current_timestamp;
+    
+    -- дополнительная проверка: исправляем записи, где created_at > updated_at
+    update s_psql_dds.t_sql_source_structured
+    set
+        created_at = least(created_at, updated_at),
+        updated_at = greatest(created_at, updated_at)
+    where created_at > updated_at;
 
 end;
 $$;

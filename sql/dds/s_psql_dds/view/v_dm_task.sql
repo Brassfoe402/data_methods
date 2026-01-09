@@ -18,3 +18,4 @@ from s_psql_dds.t_dm_task t;
 
 comment on view s_psql_dds.v_dm_task is 'Витрина данных на основе таблицы t_dm_task';
 
+

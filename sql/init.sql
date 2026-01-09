@@ -66,15 +66,17 @@ BEGIN
         COALESCE(region, 'UNKNOWN'),
         ABS(amount),                   
         ABS(duration),
-        count,
-        created_at,
-        updated_at
+        GREATEST(count, 0),
+        -- гарантируем created_at <= updated_at
+        LEAST(created_at, updated_at) as created_at,
+        GREATEST(created_at, updated_at) as updated_at
     FROM s_psql_dds.t_sql_source_unstructured
     WHERE 
-        created_at::DATE BETWEEN p_start_date AND p_end_date
+        LEAST(created_at, updated_at)::DATE BETWEEN p_start_date AND p_end_date
         AND id IS NOT NULL             
-        AND amount IS NOT NULL         
-        AND created_at <= updated_at   
+        AND amount IS NOT NULL
+        AND created_at IS NOT NULL
+        AND updated_at IS NOT NULL
     
     ON CONFLICT (id_source) DO UPDATE 
     SET
@@ -85,8 +87,23 @@ BEGIN
         amount = EXCLUDED.amount,
         duration = EXCLUDED.duration,
         count = EXCLUDED.count,
-        updated_at = EXCLUDED.updated_at,
+        -- гарантируем created_at <= updated_at при обновлении
+        created_at = LEAST(
+            LEAST(EXCLUDED.created_at, EXCLUDED.updated_at),
+            s_psql_dds.t_sql_source_structured.created_at
+        ),
+        updated_at = GREATEST(
+            GREATEST(EXCLUDED.created_at, EXCLUDED.updated_at),
+            s_psql_dds.t_sql_source_structured.updated_at
+        ),
         load_dttm = CURRENT_TIMESTAMP;
+    
+    -- дополнительная проверка: исправляем записи, где created_at > updated_at
+    UPDATE s_psql_dds.t_sql_source_structured
+    SET
+        created_at = LEAST(created_at, updated_at),
+        updated_at = GREATEST(created_at, updated_at)
+    WHERE created_at > updated_at;
 
 END;
 $$ LANGUAGE plpgsql;
@@ -254,3 +271,285 @@ SELECT
 FROM s_psql_dds.t_dm_task t;
 
 COMMENT ON VIEW s_psql_dds.v_dm_task IS 'Витрина данных на основе таблицы t_dm_task';
+
+-- Создание таблицы для хранения результатов проверок качества данных
+CREATE TABLE s_psql_dds.t_dq_check_results (
+    check_id SERIAL PRIMARY KEY,
+    check_type VARCHAR(50) NOT NULL,
+    table_name VARCHAR(100) NOT NULL,
+    execution_date TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) NOT NULL,
+    error_message TEXT
+);
+
+COMMENT ON TABLE s_psql_dds.t_dq_check_results IS 'Таблица для хранения результатов проверок качества данных';
+
+CREATE INDEX idx_dq_check_results_date ON s_psql_dds.t_dq_check_results(execution_date);
+CREATE INDEX idx_dq_check_results_status ON s_psql_dds.t_dq_check_results(status);
+
+-- Создание функции для проверок качества данных
+CREATE OR REPLACE FUNCTION s_psql_dds.fn_dq_checks_load(p_start_dt DATE, p_end_dt DATE)
+RETURNS VOID AS $$
+DECLARE
+    v_check_result INTEGER;
+    v_error_message TEXT;
+    v_total_records INTEGER;
+    v_null_records INTEGER;
+    v_duplicate_count INTEGER;
+    v_invalid_fk_count INTEGER;
+    v_source_sum NUMERIC;
+    v_dm_sum NUMERIC;
+    v_category_sum NUMERIC;
+    v_total_sum NUMERIC;
+BEGIN
+    RAISE NOTICE 'Starting data quality checks: % - %', p_start_dt, p_end_dt;
+    
+    -- Check 1: Correctness - comparison of sums between source and data mart
+    BEGIN
+        SELECT COALESCE(SUM(CASE WHEN amount::TEXT = 'NaN' THEN 0 ELSE amount END), 0) INTO v_source_sum
+        FROM s_psql_dds.t_sql_source_structured
+        WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+        AND amount IS NOT NULL;
+        
+        SELECT COALESCE(SUM(CASE WHEN amount::TEXT = 'NaN' THEN 0 ELSE amount END), 0) INTO v_dm_sum
+        FROM s_psql_dds.v_dm_task
+        WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+        AND amount IS NOT NULL;
+        
+        IF ABS(v_source_sum - v_dm_sum) > 0.01 THEN
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'correctness',
+                'v_dm_task',
+                'failed',
+                'Sum mismatch: source = ' || COALESCE(v_source_sum::TEXT, '0') || 
+                ', data_mart = ' || COALESCE(v_dm_sum::TEXT, '0') || 
+                ', difference = ' || COALESCE(ABS(v_source_sum - v_dm_sum)::TEXT, '0')
+            );
+        ELSE
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'correctness',
+                'v_dm_task',
+                'passed',
+                'Sums match: source = ' || COALESCE(v_source_sum::TEXT, '0') || 
+                ', data_mart = ' || COALESCE(v_dm_sum::TEXT, '0')
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO s_psql_dds.t_dq_check_results (
+            check_type, table_name, status, error_message
+        ) VALUES (
+            'correctness',
+            'v_dm_task',
+            'error',
+            'Error in correctness check: ' || SQLERRM
+        );
+    END;
+    
+    -- Check 2: Completeness - checking for missing values in critical fields
+    BEGIN
+        SELECT COUNT(*) INTO v_total_records
+        FROM s_psql_dds.v_dm_task
+        WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt;
+        
+        SELECT COUNT(*) INTO v_null_records
+        FROM s_psql_dds.v_dm_task
+        WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+        AND (id_source IS NULL OR amount IS NULL OR source_id IS NULL 
+             OR category_id IS NULL OR status_id IS NULL OR region_id IS NULL);
+        
+        IF v_total_records > 0 THEN
+            IF v_null_records > 0 THEN
+                INSERT INTO s_psql_dds.t_dq_check_results (
+                    check_type, table_name, status, error_message
+                ) VALUES (
+                    'completeness',
+                    'v_dm_task',
+                    'failed',
+                    FORMAT('Found %s records with missing values out of %s (%.2f%%)', 
+                           v_null_records, v_total_records, 
+                           (v_null_records::NUMERIC / v_total_records::NUMERIC * 100))
+                );
+            ELSE
+                INSERT INTO s_psql_dds.t_dq_check_results (
+                    check_type, table_name, status, error_message
+                ) VALUES (
+                    'completeness',
+                    'v_dm_task',
+                    'passed',
+                    FORMAT('No missing values found. Total records: %s', v_total_records)
+                );
+            END IF;
+        ELSE
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'completeness',
+                'v_dm_task',
+                'warning',
+                'No data for the specified period'
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO s_psql_dds.t_dq_check_results (
+            check_type, table_name, status, error_message
+        ) VALUES (
+            'completeness',
+            'v_dm_task',
+            'error',
+            'Error in completeness check: ' || SQLERRM
+        );
+    END;
+    
+    -- Check 3: Consistency - business rules validation
+    BEGIN
+        -- Check: sum by categories should equal total sum
+        SELECT COALESCE(SUM(CASE WHEN amount::TEXT = 'NaN' THEN 0 ELSE amount END), 0) INTO v_total_sum
+        FROM s_psql_dds.v_dm_task
+        WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+        AND amount IS NOT NULL;
+        
+        SELECT COALESCE(SUM(CASE WHEN category_sum::TEXT = 'NaN' THEN 0 ELSE category_sum END), 0) INTO v_category_sum
+        FROM (
+            SELECT SUM(CASE WHEN amount::TEXT = 'NaN' THEN 0 ELSE amount END) AS category_sum
+            FROM s_psql_dds.v_dm_task
+            WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+            AND amount IS NOT NULL
+            GROUP BY category_id
+        ) sub;
+        
+        IF ABS(v_total_sum - v_category_sum) > 0.01 THEN
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'consistency',
+                'v_dm_task',
+                'failed',
+                'Business rule violation: total_sum = ' || COALESCE(v_total_sum::TEXT, '0') || 
+                ', sum_by_categories = ' || COALESCE(v_category_sum::TEXT, '0') || 
+                ', difference = ' || COALESCE(ABS(v_total_sum - v_category_sum)::TEXT, '0')
+            );
+        ELSE
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'consistency',
+                'v_dm_task',
+                'passed',
+                'Business rules satisfied: total_sum = ' || COALESCE(v_total_sum::TEXT, '0') || 
+                ', sum_by_categories = ' || COALESCE(v_category_sum::TEXT, '0')
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO s_psql_dds.t_dq_check_results (
+            check_type, table_name, status, error_message
+        ) VALUES (
+            'consistency',
+            'v_dm_task',
+            'error',
+            'Error in consistency check: ' || SQLERRM
+        );
+    END;
+    
+    -- Check 4: Uniqueness - no duplicates by id_source
+    BEGIN
+        SELECT COUNT(*) INTO v_duplicate_count
+        FROM (
+            SELECT id_source, COUNT(*) AS cnt
+            FROM s_psql_dds.v_dm_task
+            WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+            GROUP BY id_source
+            HAVING COUNT(*) > 1
+        ) duplicates;
+        
+        IF v_duplicate_count > 0 THEN
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'uniqueness',
+                'v_dm_task',
+                'failed',
+                FORMAT('Found %s duplicates by id_source field', v_duplicate_count)
+            );
+        ELSE
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'uniqueness',
+                'v_dm_task',
+                'passed',
+                'No duplicates by id_source found'
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO s_psql_dds.t_dq_check_results (
+            check_type, table_name, status, error_message
+        ) VALUES (
+            'uniqueness',
+            'v_dm_task',
+            'error',
+            'Error in uniqueness check: ' || SQLERRM
+        );
+    END;
+    
+    -- Check 5: Validity - FK values match reference tables
+    BEGIN
+        SELECT COUNT(*) INTO v_invalid_fk_count
+        FROM s_psql_dds.v_dm_task v
+        WHERE DATE(v.created_at) BETWEEN p_start_dt AND p_end_dt
+        AND (
+            NOT EXISTS (SELECT 1 FROM s_psql_dds.d_source ds WHERE ds.id = v.source_id)
+            OR NOT EXISTS (SELECT 1 FROM s_psql_dds.d_category dc WHERE dc.id = v.category_id)
+            OR NOT EXISTS (SELECT 1 FROM s_psql_dds.d_status dst WHERE dst.id = v.status_id)
+            OR NOT EXISTS (SELECT 1 FROM s_psql_dds.d_region dr WHERE dr.id = v.region_id)
+        );
+        
+        IF v_invalid_fk_count > 0 THEN
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'validity',
+                'v_dm_task',
+                'failed',
+                FORMAT('Found %s records with invalid foreign keys', v_invalid_fk_count)
+            );
+        ELSE
+            INSERT INTO s_psql_dds.t_dq_check_results (
+                check_type, table_name, status, error_message
+            ) VALUES (
+                'validity',
+                'v_dm_task',
+                'passed',
+                'All foreign keys are valid'
+            );
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        INSERT INTO s_psql_dds.t_dq_check_results (
+            check_type, table_name, status, error_message
+        ) VALUES (
+            'validity',
+            'v_dm_task',
+            'error',
+            'Error in validity check: ' || SQLERRM
+        );
+    END;
+    
+    RAISE NOTICE 'Data quality checks completed';
+    
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Critical error in fn_dq_checks_load: %', SQLERRM;
+    INSERT INTO s_psql_dds.t_dq_check_results (
+        check_type, table_name, status, error_message
+    ) VALUES (
+        'system',
+        'v_dm_task',
+        'error',
+        'Critical error: ' || SQLERRM
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION s_psql_dds.fn_dq_checks_load(DATE, DATE) IS 'Function for executing data quality checks in v_dm_task data mart';

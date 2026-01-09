@@ -7,3 +7,4 @@ create table s_psql_dds.d_category (
 
 comment on table s_psql_dds.d_category is 'Справочник категорий';
 
+

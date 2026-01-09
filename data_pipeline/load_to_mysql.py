@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 class MySQLConnector:
-    """Класс для работы с MySQL"""
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -276,3 +275,4 @@ def run_mysql_procedure(
         return result
     finally:
         mysql_conn.disconnect()
+

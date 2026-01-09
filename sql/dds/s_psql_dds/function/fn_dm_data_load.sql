@@ -89,3 +89,4 @@ $$ language plpgsql;
 
 comment on function s_psql_dds.fn_dm_data_load(date, date) is 'Функция для загрузки данных в таблицу t_dm_task с заполнением справочников';
 
+

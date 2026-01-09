@@ -7,3 +7,4 @@ create table s_psql_dds.d_source (
 
 comment on table s_psql_dds.d_source is 'Справочник источников данных';
 
+

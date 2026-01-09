@@ -61,12 +61,11 @@ jobs:
         run: |
           docker compose run --rm pytest
 
-      # опционально, но очень круто для “критерии приемки”
       - name: Run full pipeline (etl_app)
         run: |
           docker compose run --rm etl_app python main.py
 
-      - name: Acceptance checks (Postgres view + MySQL DM)
+       - name: Acceptance checks (Postgres view + MySQL DM)
         run: |
           set -e
           PG_ID=$(docker compose ps -q postgres)
@@ -86,6 +85,28 @@ jobs:
             use etl_lab;
             select count(*) as stg_cnt from t_dm_stg_task;
             select count(*) as dm_cnt  from t_dm_task;
+          "
+
+          echo "=== Data Quality Checks Results ==="
+          docker exec -i "$PG_ID" psql -U postgres -d etl_lab -c "
+            SELECT 
+              check_type,
+              status,
+              execution_date,
+              LEFT(error_message, 100) as message_preview
+            FROM s_psql_dds.t_dq_check_results
+            ORDER BY execution_date DESC, check_type
+            LIMIT 10;
+          "
+
+          echo "=== Data Quality Summary ==="
+          docker exec -i "$PG_ID" psql -U postgres -d etl_lab -c "
+            SELECT 
+              status,
+              COUNT(*) as count
+            FROM s_psql_dds.t_dq_check_results
+            WHERE execution_date >= NOW() - INTERVAL '1 hour'
+            GROUP BY status;
           "
 
       - name: Extract coverage.xml from a created pytest container

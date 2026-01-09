@@ -85,6 +85,64 @@ services:
       - etl_network
     command: pytest tests/ -v --cov=data_pipeline --cov-report=term --cov-report=xml
 
+  dashboard:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: etl_lab
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: etl_lab
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    networks:
+      - etl_network
+    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+
+  dq_scheduler:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: etl_lab
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: etl_lab
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      SMTP_HOST: ${SMTP_HOST:-localhost}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@etl-lab.local}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - .:/app
+    networks:
+      - etl_network
+    command: python scheduler/dq_scheduler.py
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:

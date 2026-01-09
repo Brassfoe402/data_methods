@@ -7,3 +7,4 @@ create table s_psql_dds.d_status (
 
 comment on table s_psql_dds.d_status is 'Справочник статусов';
 
+

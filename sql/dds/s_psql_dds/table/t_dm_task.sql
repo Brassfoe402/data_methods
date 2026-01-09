@@ -22,3 +22,4 @@ create table s_psql_dds.t_dm_task (
 
 comment on table s_psql_dds.t_dm_task is 'Таблица фактов с идентификаторами справочников';
 
+

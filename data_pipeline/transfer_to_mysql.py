@@ -11,15 +11,6 @@ def transfer_to_mysql(pg_config: Dict[str, Any],
                      mysql_config: Dict[str, Any],
                      start_dt: Optional[datetime] = None,
                      end_dt: Optional[datetime] = None):
-    """
-    Функция для перекладки данных из PostgreSQL в MySQL
-    
-    Args:
-        pg_config: Конфигурация подключения к PostgreSQL
-        mysql_config: Конфигурация подключения к MySQL
-        start_dt: Начальная дата периода
-        end_dt: Конечная дата периода
-    """
     if start_dt is None:
         start_dt = datetime.now() - timedelta(days=90)
     if end_dt is None:
@@ -43,4 +34,5 @@ def transfer_to_mysql(pg_config: Dict[str, Any],
         
     finally:
         pg_connector.disconnect()
+
 

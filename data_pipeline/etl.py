@@ -7,6 +7,9 @@ from data_pipeline.load_data_to_db import load_data_to_db, DatabaseConnector
 from data_pipeline.fill_structured_table import fill_structured_table
 from data_pipeline.fill_dm_table import fill_dm_table
 from data_pipeline.transfer_to_mysql import transfer_to_mysql
+from data_pipeline.run_data_quality_checks import run_data_quality_checks
+from data_pipeline.run_mysql_dq_checks import run_mysql_data_quality_checks
+from data_pipeline.alerting import check_and_alert_critical_issues
 
 
 logging.basicConfig(
@@ -92,6 +95,47 @@ def etl():
             start_dt=start_dt,
             end_dt=end_dt,
         )
+
+        # 7) Проверки качества данных PostgreSQL
+        logger.info("Шаг 7: Запуск проверок качества данных PostgreSQL...")
+        run_data_quality_checks(
+            db_config=DATABASE_CONFIG,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+        # 8) Проверки качества данных MySQL
+        logger.info("Шаг 8: Запуск проверок качества данных MySQL...")
+        mysql_results = run_mysql_data_quality_checks(
+            mysql_config=MYSQL_CONFIG,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+        # 9) Проверка критических нарушений и алертинг
+        logger.info("Шаг 9: Проверка критических нарушений и отправка алертов...")
+        from data_pipeline.load_data_to_db import DatabaseConnector
+        pg_connector = DatabaseConnector(DATABASE_CONFIG)
+        pg_connector.connect()
+        cursor = pg_connector.connection.cursor()
+        cursor.execute("""
+            SELECT check_type, status, error_message, execution_date
+            FROM s_psql_dds.t_dq_check_results
+            WHERE execution_date >= %s
+            ORDER BY execution_date DESC, check_type
+            LIMIT 10
+        """, (start_dt,))
+        pg_results_list = cursor.fetchall()
+        cursor.close()
+        pg_connector.disconnect()
+        
+        critical_issues = check_and_alert_critical_issues(
+            pg_results=pg_results_list,
+            mysql_results=mysql_results if mysql_results else None
+        )
+        
+        if critical_issues:
+            logger.warning(f"Обнаружено {len(critical_issues)} критических нарушений качества данных")
 
         logger.info("=== Пайплайн успешно завершен ===")
 

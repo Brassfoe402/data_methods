@@ -7,3 +7,4 @@ create table s_psql_dds.d_region (
 
 comment on table s_psql_dds.d_region is 'Справочник регионов';
 
+

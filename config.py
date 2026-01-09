@@ -15,6 +15,7 @@ ETL_CONFIG = {
     'table_structured': 't_sql_source_structured',
     'function_etl': 's_psql_dds.fn_etl_data_load',
     'function_dm': 's_psql_dds.fn_dm_data_load',
+    'function_dq': 's_psql_dds.fn_dq_checks_load',
 }
 
 MYSQL_CONFIG = {
