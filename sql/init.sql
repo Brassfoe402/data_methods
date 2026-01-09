@@ -90,3 +90,167 @@ BEGIN
 
 END;
 $$ LANGUAGE plpgsql;
+
+-- Создание справочников для категориальных признаков
+CREATE TABLE s_psql_dds.d_source (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE
+);
+
+COMMENT ON TABLE s_psql_dds.d_source IS 'Справочник источников данных';
+
+CREATE TABLE s_psql_dds.d_category (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE
+);
+
+COMMENT ON TABLE s_psql_dds.d_category IS 'Справочник категорий';
+
+CREATE TABLE s_psql_dds.d_status (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE
+);
+
+COMMENT ON TABLE s_psql_dds.d_status IS 'Справочник статусов';
+
+CREATE TABLE s_psql_dds.d_region (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE
+);
+
+COMMENT ON TABLE s_psql_dds.d_region IS 'Справочник регионов';
+
+-- Создание таблицы t_dm_task
+CREATE TABLE s_psql_dds.t_dm_task (
+    id SERIAL PRIMARY KEY,
+    id_source INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    category_id INTEGER NOT NULL,
+    status_id INTEGER NOT NULL,
+    region_id INTEGER NOT NULL,
+    amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+    duration INTEGER NOT NULL CHECK (duration > 0),
+    count INTEGER NOT NULL CHECK (count >= 0),
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    load_dttm TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_dates CHECK (created_at <= updated_at),
+    CONSTRAINT fk_source FOREIGN KEY (source_id) REFERENCES s_psql_dds.d_source(id),
+    CONSTRAINT fk_category FOREIGN KEY (category_id) REFERENCES s_psql_dds.d_category(id),
+    CONSTRAINT fk_status FOREIGN KEY (status_id) REFERENCES s_psql_dds.d_status(id),
+    CONSTRAINT fk_region FOREIGN KEY (region_id) REFERENCES s_psql_dds.d_region(id)
+);
+
+COMMENT ON TABLE s_psql_dds.t_dm_task IS 'Таблица фактов с идентификаторами справочников';
+
+-- Создание функции fn_dm_data_load
+CREATE OR REPLACE FUNCTION s_psql_dds.fn_dm_data_load(
+    p_start_dt DATE,
+    p_end_dt DATE
+)
+RETURNS TABLE (
+    v_processed_rows INTEGER,
+    v_status VARCHAR
+) AS $$
+DECLARE
+    v_inserted_rows INTEGER := 0;
+BEGIN
+    RAISE NOTICE 'Начало fn_dm_data_load: % - %', p_start_dt, p_end_dt;
+    
+    -- Заполнение справочника d_source
+    INSERT INTO s_psql_dds.d_source (name)
+    SELECT DISTINCT source
+    FROM s_psql_dds.t_sql_source_structured
+    WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+    ON CONFLICT (name) DO NOTHING;
+    
+    -- Заполнение справочника d_category
+    INSERT INTO s_psql_dds.d_category (name)
+    SELECT DISTINCT category
+    FROM s_psql_dds.t_sql_source_structured
+    WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+    ON CONFLICT (name) DO NOTHING;
+    
+    -- Заполнение справочника d_status
+    INSERT INTO s_psql_dds.d_status (name)
+    SELECT DISTINCT status
+    FROM s_psql_dds.t_sql_source_structured
+    WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+    ON CONFLICT (name) DO NOTHING;
+    
+    -- Заполнение справочника d_region
+    INSERT INTO s_psql_dds.d_region (name)
+    SELECT DISTINCT region
+    FROM s_psql_dds.t_sql_source_structured
+    WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt
+    ON CONFLICT (name) DO NOTHING;
+    
+    -- Очистка данных за период в целевой таблице
+    DELETE FROM s_psql_dds.t_dm_task
+    WHERE DATE(created_at) BETWEEN p_start_dt AND p_end_dt;
+    
+    -- Загрузка данных в t_dm_task с джойнами на справочники
+    INSERT INTO s_psql_dds.t_dm_task (
+        id_source,
+        source_id,
+        category_id,
+        status_id,
+        region_id,
+        amount,
+        duration,
+        count,
+        created_at,
+        updated_at
+    )
+    SELECT 
+        s.id_source,
+        ds.id AS source_id,
+        dc.id AS category_id,
+        dst.id AS status_id,
+        dr.id AS region_id,
+        s.amount,
+        s.duration,
+        s.count,
+        s.created_at,
+        s.updated_at
+    FROM s_psql_dds.t_sql_source_structured s
+    INNER JOIN s_psql_dds.d_source ds ON s.source = ds.name
+    INNER JOIN s_psql_dds.d_category dc ON s.category = dc.name
+    INNER JOIN s_psql_dds.d_status dst ON s.status = dst.name
+    INNER JOIN s_psql_dds.d_region dr ON s.region = dr.name
+    WHERE DATE(s.created_at) BETWEEN p_start_dt AND p_end_dt;
+    
+    GET DIAGNOSTICS v_inserted_rows = ROW_COUNT;
+    
+    RETURN QUERY
+    SELECT v_inserted_rows, 'SUCCESS'::VARCHAR;
+    
+    RAISE NOTICE 'Завершено fn_dm_data_load. Загружено % записей', v_inserted_rows;
+    
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Ошибка в fn_dm_data_load: %', SQLERRM;
+    RETURN QUERY
+    SELECT 0, ('ERROR: ' || SQLERRM)::VARCHAR;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION s_psql_dds.fn_dm_data_load(DATE, DATE) IS 'Функция для загрузки данных в таблицу t_dm_task с заполнением справочников';
+
+-- Создание представления v_dm_task
+CREATE OR REPLACE VIEW s_psql_dds.v_dm_task AS
+SELECT 
+    t.id,
+    t.id_source,
+    t.source_id,
+    t.category_id,
+    t.status_id,
+    t.region_id,
+    t.amount,
+    t.duration,
+    t.count,
+    t.created_at,
+    t.updated_at,
+    t.load_dttm
+FROM s_psql_dds.t_dm_task t;
+
+COMMENT ON VIEW s_psql_dds.v_dm_task IS 'Витрина данных на основе таблицы t_dm_task';

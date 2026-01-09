@@ -5,11 +5,11 @@ import sys
 def main():
     try:
         etl()
-        sys.exit(0)
+        return 0
     except Exception as e:
         print(f"Критическая ошибка: {e}")
-        sys.exit(1)
+        return 1
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

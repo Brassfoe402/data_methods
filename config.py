@@ -14,6 +14,15 @@ ETL_CONFIG = {
     'table_unstructured': 't_sql_source_unstructured',
     'table_structured': 't_sql_source_structured',
     'function_etl': 's_psql_dds.fn_etl_data_load',
+    'function_dm': 's_psql_dds.fn_dm_data_load',
+}
+
+MYSQL_CONFIG = {
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'port': int(os.getenv('MYSQL_PORT', 3307)),
+    'database': os.getenv('MYSQL_DB', 'etl_lab'),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', 'root'),
 }
 
 DEFAULT_START_DATE = datetime.now() - timedelta(days=90)

@@ -48,5 +48,10 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Coverage reports
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
 
 .dockerignore

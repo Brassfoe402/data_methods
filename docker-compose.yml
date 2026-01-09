@@ -15,11 +15,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - etl_network
 
   etl_app:
     build: .
     depends_on:
       postgres:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     environment:
       DB_HOST: postgres
@@ -27,8 +31,31 @@ services:
       DB_NAME: etl_lab
       DB_USER: postgres
       DB_PASSWORD: postgres
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: etl_lab
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
     volumes:
       - .:/app
+    networks:
+      - etl_network
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: etl_lab
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - etl_network
 
@@ -39,20 +66,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: etl_lab
       DB_USER: postgres
       DB_PASSWORD: postgres
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DB: etl_lab
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
     volumes:
       - .:/app
     networks:
       - etl_network
-    command: pytest tests/ -v --cov=data_pipeline --cov-report=xml
+    command: pytest tests/ -v --cov=data_pipeline --cov-report=term --cov-report=xml
+
 
 volumes:
   postgres_data:
+  mysql_data:
 
 networks:
   etl_network:

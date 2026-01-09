@@ -3,71 +3,106 @@ name: CI Pipeline
 on: [push, pull_request]
 
 jobs:
-  build-and-test:
+  compose-test:
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: etl_lab
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov 
-        sudo apt-get update
-        sudo apt-get install -y postgresql-client
+      - name: Build images
+        run: |
+          docker compose build
 
+      - name: Start databases (postgres + mysql)
+        run: |
+          docker compose up -d postgres mysql
+          docker compose ps
 
-    - name: Wait for PostgreSQL
-      run: |
-        for i in {1..30}; do
-          if pg_isready -h localhost -p 5432 -U postgres; then
-            echo "PostgreSQL is ready!"
-            exit 0
+      - name: Wait for DB healthchecks
+        run: |
+          set -e
+
+          PG_ID=$(docker compose ps -q postgres)
+          MY_ID=$(docker compose ps -q mysql)
+
+          echo "postgres container: $PG_ID"
+          echo "mysql container:     $MY_ID"
+
+          for i in {1..90}; do
+            PG=$(docker inspect --format='{{.State.Health.Status}}' "$PG_ID" 2>/dev/null || echo "starting")
+            MY=$(docker inspect --format='{{.State.Health.Status}}' "$MY_ID" 2>/dev/null || echo "starting")
+
+            echo "[$i] postgres=$PG mysql=$MY"
+
+            if [ "$PG" = "healthy" ] && [ "$MY" = "healthy" ]; then
+              echo "Both DBs are healthy"
+              break
+            fi
+
+            sleep 2
+          done
+
+          # финальная проверка
+          PG=$(docker inspect --format='{{.State.Health.Status}}' "$PG_ID")
+          MY=$(docker inspect --format='{{.State.Health.Status}}' "$MY_ID")
+
+          if [ "$PG" != "healthy" ] || [ "$MY" != "healthy" ]; then
+            echo "DBs did not become healthy"
+            docker compose logs postgres || true
+            docker compose logs mysql || true
+            exit 1
           fi
-          echo "Waiting for PostgreSQL..."
-          sleep 2
-        done
-        echo "PostgreSQL failed to start"
-        exit 1
 
-    - name: Initialize Database
-      env:
-        PGPASSWORD: postgres
-      run: |
-        psql -h localhost -U postgres -d etl_lab -f sql/init.sql
+      - name: Run tests (pytest container) + coverage.xml
+        run: |
+          docker compose run --rm pytest
 
-    - name: Run Tests
-      env:
-        DB_HOST: localhost
-        DB_PORT: 5432
-        DB_NAME: etl_lab
-        DB_USER: postgres
-        DB_PASSWORD: postgres
-      run: |
-        pytest tests/ -v --cov=data_pipeline --cov-report=term-missing
+      # опционально, но очень круто для “критерии приемки”
+      - name: Run full pipeline (etl_app)
+        run: |
+          docker compose run --rm etl_app python main.py
 
-    - name: Build Docker Image
-      run: |
-        docker build -t etl_app .
+      - name: Acceptance checks (Postgres view + MySQL DM)
+        run: |
+          set -e
+          PG_ID=$(docker compose ps -q postgres)
+          MY_ID=$(docker compose ps -q mysql)
+
+          echo "=== Postgres checks ==="
+          docker exec -i "$PG_ID" psql -U postgres -d etl_lab -c "
+            select
+              (select count(*) from s_psql_dds.t_sql_source_unstructured) as unstructured,
+              (select count(*) from s_psql_dds.t_sql_source_structured)   as structured,
+              (select count(*) from s_psql_dds.t_dm_task)                 as dm_pg,
+              (select count(*) from s_psql_dds.v_dm_task)                 as view_cnt;
+          "
+
+          echo "=== MySQL checks ==="
+          docker exec -i "$MY_ID" mysql -uroot -proot -e "
+            use etl_lab;
+            select count(*) as stg_cnt from t_dm_stg_task;
+            select count(*) as dm_cnt  from t_dm_task;
+          "
+
+      - name: Extract coverage.xml from a created pytest container
+        run: |
+          set -e
+          CID=$(docker compose create pytest)
+          docker cp "$CID":/app/coverage.xml ./coverage.xml || true
+          docker rm -v "$CID" || true
+          ls -la coverage.xml || true
+
+      - name: Upload coverage.xml artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+      - name: Shutdown
+        if: always()
+        run: |
+          docker compose down -v
